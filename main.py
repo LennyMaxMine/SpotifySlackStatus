@@ -5,6 +5,8 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from dotenv import load_dotenv
 import os
+import flask
+import requests
 
 load_dotenv()
 
@@ -37,7 +39,7 @@ def set_slack_status(text, emoji="🎵"):
 def clear_status():
     set_slack_status("", "")
 
-def set_previous_status(text, emoji):
+def set_original_status(text, emoji):
     try:
         slack_client.users_profile_set(profile={
             "status_text": text,
@@ -48,42 +50,54 @@ def set_previous_status(text, emoji):
     except SlackApiError as e:
         print("Slack-Fehler:", e.response["error"])
 
-last_track = None
+last_status = None
+errorcount = 0
 
-previous_status_early = slack_client.users_profile_get()
-previous_status_text = previous_status_early["profile"]["status_text"]
-previous_status_emoji = previous_status_early["profile"]["status_emoji"]
+original_status_early = slack_client.users_profile_get()
+original_status_text = original_status_early["profile"]["status_text"]
+original_status_emoji = original_status_early["profile"]["status_emoji"]
 
-print(f"Your current status is: {previous_status_emoji} | {previous_status_text}")
+print(f"Your current status is: {original_status_emoji} | {original_status_text}")
 
 try:
     while True:
-        playback = sp.current_playback()
-        if playback and playback.get("is_playing"):
-            track = playback["item"]
-            name = track["name"]
-            artist = ", ".join([a["name"] for a in track["artists"]])
-            status_text = f"{name} – {artist}"
+        try:
+            playback = sp.current_playback()
+            if playback and playback.get("is_playing"):
+                track = playback["item"]
+                name = track["name"]
+                artist = ", ".join([a["name"] for a in track["artists"]])
+                status_text = f"{name} – {artist}"
 
-            if status_text != last_track:
-                set_slack_status("Listening to: " + status_text)
-                last_track = status_text
+                if status_text != last_status:
+                    set_slack_status("Listening to: " + status_text)
+                    last_status = status_text
+                else:
+                    print("Song/Status didn't change")
             else:
+                if last_status != original_status_text:
+                    set_original_status(original_status_text, original_status_emoji)
+                    last_status = original_status_text
                 print("Song/Status didn't change")
-        else:
-            set_previous_status(previous_status_text, previous_status_emoji)
-            last_track = None
 
-        print("Checking again in 20s")
-        time.sleep(5)
-        print("Checking again in 15")
-        time.sleep(5)
-        print("Checking again in 10")
-        time.sleep(5)
-        print("Checking again in 5s")
-        time.sleep(5)
-        print("Checking again")
+            print("Checking again in 20s")
+            time.sleep(5)
+            print("Checking again in 15")
+            time.sleep(5)
+            print("Checking again in 10")
+            time.sleep(5)
+            print("Checking again in 5s")
+            time.sleep(5)
+            print("Checking again")
+            errorcount = 0
+        except Exception as e:
+            errorcount += 1
+            print("An Error happend: " + e)
+            if errorcount > 2:
+                set_original_status(original_status_text, original_status_emoji)
+                print("Finished.")
+                break
 
 except KeyboardInterrupt:
-    set_previous_status(previous_status_text, previous_status_emoji)
+    set_original_status(original_status_text, original_status_emoji)
     print("Finished.")

@@ -1,3 +1,5 @@
 spotipy
 slack_sdk
 python-dotenv
+flask
+requests
