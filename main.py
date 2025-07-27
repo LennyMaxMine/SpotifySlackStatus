@@ -406,35 +406,33 @@ def set_slack_status(firebase_uid):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 global_status = {}  # firebase_uid -> {'text': str, 'emoji': str, 'last_update': str}
-status_threads = {}
-spotify_threads = {}
-spotify_active = {}  # firebase_uid -> bool
+status_threads = {}  # firebase_uid -> Thread
+spotify_threads = {}  # firebase_uid -> Thread
+spotify_active = {}   # firebase_uid -> bool
+slack_worker_status = {}  # firebase_uid -> bool
 
 def global_status_worker(firebase_uid):
-    while True:
-        if firebase_uid not in global_status:
-            time.sleep(30)
-            continue
-
-        slack_token, _, _ = get_user_tokens(firebase_uid)
-        if not slack_token:
-            time.sleep(30)
-            continue
-
-        status = global_status[firebase_uid]
-        try:
-            slack_client = WebClient(token=slack_token)
-            slack_client.users_profile_set(profile={
-                "status_text": status.get('text', ''),
-                "status_emoji": status.get('emoji', ''),
-                "status_expiration": 0
-            })
-            print(f"Global status updated for {firebase_uid}: {status.get('text', '')}")
-        except SlackApiError as e:
-            print(f"Failed to update Slack status for {firebase_uid}: {e.response['error']}")
+    slack_worker_status[firebase_uid] = True
+    while slack_worker_status.get(firebase_uid, False):
+        if firebase_uid in global_status:
+            slack_token, _, _ = get_user_tokens(firebase_uid)
+            if slack_token:
+                status = global_status[firebase_uid]
+                try:
+                    slack_client = WebClient(token=slack_token)
+                    slack_client.users_profile_set(profile={
+                        "status_text": status.get('text', ''),
+                        "status_emoji": status.get('emoji', ''),
+                        "status_expiration": 0
+                    })
+                    print(f"Global status updated for {firebase_uid}: {status.get('text', '')}")
+                except SlackApiError as e:
+                    print(f"Failed to update Slack status for {firebase_uid}: {e.response['error']}")
         time.sleep(30)
+    print(f"Slack worker stopped for {firebase_uid}")
 
 def spotify_pull_worker(firebase_uid):
+    spotify_active[firebase_uid] = True
     slack_token, spotify_token, spotify_refresh_token = get_user_tokens(firebase_uid)
     sp = spotipy.Spotify(auth=spotify_token)
 
@@ -463,6 +461,7 @@ def spotify_pull_worker(firebase_uid):
             print(f"Spotify pull error for {firebase_uid}: {e}")
 
         time.sleep(30)
+    print(f"Spotify pull stopped for {firebase_uid}")
 
 @app.route('/global/status/<firebase_uid>', methods=['POST'])
 def set_global_status(firebase_uid):
@@ -476,7 +475,7 @@ def set_global_status(firebase_uid):
         'last_update': datetime.now().isoformat()
     }
 
-    if firebase_uid not in status_threads:
+    if not slack_worker_status.get(firebase_uid, False):
         t = threading.Thread(target=global_status_worker, args=(firebase_uid,), daemon=True)
         t.start()
         status_threads[firebase_uid] = t
@@ -485,18 +484,41 @@ def set_global_status(firebase_uid):
 
 @app.route('/spotify/pull/start/<firebase_uid>', methods=['POST'])
 def start_spotify_pull(firebase_uid):
-    spotify_active[firebase_uid] = True
-    t = threading.Thread(target=spotify_pull_worker, args=(firebase_uid,), daemon=True)
-    t.start()
-    spotify_threads[firebase_uid] = t
-    return jsonify({'success': True, 'message': f'Spotify pulling started for {firebase_uid}'})
+    if not spotify_active.get(firebase_uid, False):
+        spotify_active[firebase_uid] = True
+        t = threading.Thread(target=spotify_pull_worker, args=(firebase_uid,), daemon=True)
+        t.start()
+        spotify_threads[firebase_uid] = t
+    return jsonify({'success': True, 'message': 'Spotify pulling started'})
 
 @app.route('/spotify/pull/stop/<firebase_uid>', methods=['POST'])
 def stop_spotify_pull(firebase_uid):
     spotify_active[firebase_uid] = False
-    return jsonify({'success': True, 'message': f'Spotify pulling stopped for {firebase_uid}'})
+    return jsonify({'success': True, 'message': 'Spotify pulling stopped'})
 
+@app.route('/spotify/pull/status/<firebase_uid>', methods=['GET'])
+def spotify_pull_status_route(firebase_uid):
+    active = spotify_active.get(firebase_uid, False)
+    return jsonify({'success': True, 'pulling': active})
+
+@app.route('/slack/worker/start/<firebase_uid>', methods=['POST'])
+def start_slack_worker(firebase_uid):
+    if not slack_worker_status.get(firebase_uid, False):
+        slack_worker_status[firebase_uid] = True
+        t = threading.Thread(target=global_status_worker, args=(firebase_uid,), daemon=True)
+        t.start()
+        status_threads[firebase_uid] = t
+    return jsonify({"success": True, "message": "Slack worker started"})
+
+@app.route('/slack/worker/stop/<firebase_uid>', methods=['POST'])
+def stop_slack_worker(firebase_uid):
+    slack_worker_status[firebase_uid] = False
+    return jsonify({"success": True, "message": "Slack worker stopped"})
+
+@app.route('/slack/worker/status/<firebase_uid>', methods=['GET'])
+def slack_worker_status_route(firebase_uid):
+    active = slack_worker_status.get(firebase_uid, False)
+    return jsonify({"success": True, "active": active})
 
 if __name__ == "__main__":
-    print("Starting Spotify-Slack Sync Backend Server on port 1605...")
     app.run(host="0.0.0.0", port=1605, debug=True)

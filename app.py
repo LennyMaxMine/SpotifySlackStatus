@@ -5,11 +5,15 @@ from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, auth, firestore
 import json
+from flask_cors import CORS
+
 
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
+
+CORS(app, supports_credentials=True)
 
 cred = credentials.Certificate(os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY_PATH"))
 firebase_admin.initialize_app(cred)

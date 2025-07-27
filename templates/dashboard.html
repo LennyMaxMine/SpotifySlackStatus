@@ -30,13 +30,23 @@
         </li>
     </ul>
 
-    <h2>Spotify Sync Management</h2>
+    <h2>Spotify Pull Management</h2>
     <form method="post" action="http://127.0.0.1:1605/spotify/pull/start/{{ firebase_uid }}">
         <button type="submit">Start Spotify Pull</button>
     </form>
     <form method="post" action="http://127.0.0.1:1605/spotify/pull/stop/{{ firebase_uid }}">
         <button type="submit">Stop Spotify Pull</button>
     </form>
+    <p>Spotify Pull Status: <span id="spotifyPullStatus">Loading...</span></p>
+
+    <h2>Slack Worker Management</h2>
+    <form method="post" action="http://127.0.0.1:1605/slack/worker/start/{{ firebase_uid }}">
+        <button type="submit">Start Slack Worker</button>
+    </form>
+    <form method="post" action="http://127.0.0.1:1605/slack/worker/stop/{{ firebase_uid }}">
+        <button type="submit">Stop Slack Worker</button>
+    </form>
+    <p>Slack Worker Status: <span id="slackWorkerStatus">Loading...</span></p>
 
     <h2>Set Global Status</h2>
     <form id="globalStatusForm">
@@ -62,16 +72,31 @@
         })
         .then(response => response.json())
         .then(data => {
-            if(data.success) {
-                alert('Global status updated successfully');
-            } else {
-                alert('Error: ' + (data.error || 'Unknown Error'));
-            }
+            alert(data.success ? 'Global status updated successfully' : 'Error: ' + (data.error || 'Unknown Error'));
         })
         .catch(error => {
             alert('Fetch-Error: ' + error);
         });
     });
+
+    function updateStatuses() {
+        const firebaseUid = '{{ firebase_uid }}';
+
+        fetch(`http://127.0.0.1:1605/spotify/pull/status/${firebaseUid}`)
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById('spotifyPullStatus').innerText = data.pulling ? 'Active' : 'Inactive';
+            });
+
+        fetch(`http://127.0.0.1:1605/slack/worker/status/${firebaseUid}`)
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById('slackWorkerStatus').innerText = data.active ? 'Active' : 'Inactive';
+            });
+    }
+
+    setInterval(updateStatuses, 5000);
+    updateStatuses();
     </script>
 
     <h2>Debug</h2>
