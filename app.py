@@ -290,5 +290,26 @@ def get_user_tokens():
         }
     })
 
+@app.route("/dashboard")
+@require_auth
+def dashboard():
+    firebase_uid = session['firebase_uid']
+    user_data = get_user_data(firebase_uid)
+
+    slack_data = user_data.get('slack', {})
+    spotify_data = user_data.get('spotify', {})
+
+    return render_template(
+        'dashboard.html',
+        user_email=session.get('user_email'),
+        firebase_uid=firebase_uid,
+        slack_connected=bool(slack_data.get('access_token')),
+        slack_user_id=slack_data.get('user_id'),
+        slack_connected_at=slack_data.get('connected_at'),
+        spotify_connected=bool(spotify_data.get('access_token')),
+        spotify_connected_at=spotify_data.get('connected_at')
+    )
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8888, debug=True)

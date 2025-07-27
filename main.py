@@ -42,7 +42,7 @@ def refresh_spotify_token(firebase_uid, refresh_token):
         sp_oauth = SpotifyOAuth(
             client_id=os.getenv("SPOTIPY_CLIENT_ID"),
             client_secret=os.getenv("SPOTIPY_CLIENT_SECRET"),
-            redirect_uri=os.getenv("SPOTIPY_REDIRECT_URI"),
+            redirect_uri="127.0.0.1:1605/callback", #os.getenv("SPOTIPY_REDIRECT_URI"),
             scope="user-read-playback-state"
         )
         
@@ -311,13 +311,102 @@ def health_check():
         'timestamp': datetime.now().isoformat()
     })
 
+@app.route('/user/tokens/<firebase_uid>', methods=['GET'])
+def get_user_tokens_api(firebase_uid):
+    try:
+        slack_token, spotify_access_token, spotify_refresh_token = get_user_tokens(firebase_uid)
+        return jsonify({
+            'slack_token': bool(slack_token),
+            'spotify_access_token': bool(spotify_access_token),
+            'spotify_refresh_token': bool(spotify_refresh_token)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/sync/reset/<firebase_uid>', methods=['POST'])
+def reset_sync(firebase_uid):
+    try:
+        if firebase_uid in sync_status:
+            sync_status.pop(firebase_uid)
+        if firebase_uid in sync_threads:
+            sync_threads.pop(firebase_uid)
+        return jsonify({'success': True, 'message': f'Sync data reset for {firebase_uid}'})
+    except Exception as e:
+        return jsonify({'error': str(e), 'success': False}), 500
+
+@app.route('/spotify/now/<firebase_uid>', methods=['GET'])
+def get_current_spotify_track(firebase_uid):
+    try:
+        _, spotify_token, spotify_refresh_token = get_user_tokens(firebase_uid)
+        if not spotify_token:
+            return jsonify({'error': 'No Spotify token found'}), 400
+
+        sp = spotipy.Spotify(auth=spotify_token)
+        try:
+            playback = sp.current_playback()
+        except spotipy.exceptions.SpotifyException as e:
+            if e.http_status == 401:
+                new_token = refresh_spotify_token(firebase_uid, spotify_refresh_token)
+                if not new_token:
+                    return jsonify({'error': 'Unable to refresh token'}), 401
+                sp = spotipy.Spotify(auth=new_token)
+                playback = sp.current_playback()
+            else:
+                raise e
+
+        if not playback or not playback.get("is_playing"):
+            return jsonify({'is_playing': False})
+
+        track = playback["item"]
+        return jsonify({
+            'is_playing': True,
+            'name': track["name"],
+            'artists': [a["name"] for a in track.get("artists", [])],
+            'album': track["album"]["name"]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/slack/status/<firebase_uid>', methods=['POST'])
+def set_slack_status(firebase_uid):
+    try:
+        slack_token, _, _ = get_user_tokens(firebase_uid)
+        if not slack_token:
+            return jsonify({'error': 'No Slack token found'}), 400
+
+        data = request.get_json()
+        status_text = data.get('text', '')
+        status_emoji = data.get('emoji', '')
+
+        slack_client = WebClient(token=slack_token)
+        slack_client.users_profile_set(profile={
+            "status_text": status_text,
+            "status_emoji": status_emoji,
+            "status_expiration": 0
+        })
+
+        if firebase_uid in sync_status:
+            sync_status[firebase_uid]['original_status'] = {
+                'text': status_text,
+                'emoji': status_emoji
+            }
+        else:
+            sync_status[firebase_uid] = {
+                'original_status': {
+                    'text': status_text,
+                    'emoji': status_emoji
+                },
+                'active': False,
+                'current_song': None,
+                'error_count': 0,
+                'last_update': datetime.now().isoformat()
+            }
+
+        return jsonify({'success': True, 'message': 'Slack status updated and saved as original'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 if __name__ == "__main__":
     print("Starting Spotify-Slack Sync Backend Server on port 1605...")
-    print("Available endpoints:")
-    print("  POST /sync/start/<firebase_uid> - Start sync for user")
-    print("  POST /sync/stop/<firebase_uid> - Stop sync for user") 
-    print("  GET  /sync/status/<firebase_uid> - Get sync status for user")
-    print("  GET  /sync/list - List all active syncs")
-    print("  GET  /health - Health check")
-    
     app.run(host="0.0.0.0", port=1605, debug=True)

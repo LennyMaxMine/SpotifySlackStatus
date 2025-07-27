@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dashboard</title>
+</head>
+<body>
+    <h1>Welcome, {{ user_email }}</h1>
+
+    <h2>Linked Accounts</h2>
+    <ul>
+        <li>
+            Slack:
+            {% if slack_connected %}
+                Connected as {{ slack_user_id }} (connected at {{ slack_connected_at }})
+                <a href="/slack/disconnect">Disconnect</a>
+            {% else %}
+                Not connected
+                <a href="/slack/login">Connect Slack</a>
+            {% endif %}
+        </li>
+        <li>
+            Spotify:
+            {% if spotify_connected %}
+                Connected (connected at {{ spotify_connected_at }})
+                <a href="/spotify/disconnect">Disconnect</a>
+            {% else %}
+                Not connected
+                <a href="/spotify/login">Connect Spotify</a>
+            {% endif %}
+        </li>
+    </ul>
+
+    <h2>Sync Management</h2>
+    <form method="post" action="http://127.0.0.1:1605/sync/start/{{ firebase_uid }}">
+        <button type="submit">Start Sync</button>
+    </form>
+    <form method="post" action="http://127.0.0.1:1605/sync/stop/{{ firebase_uid }}">
+        <button type="submit">Stop Sync</button>
+    </form>
+    <form method="post" action="http://127.0.0.1:1605/sync/reset/{{ firebase_uid }}">
+        <button type="submit">Reset Sync</button>
+    </form>
+    <a href="http://127.0.0.1:1605/sync/status/{{ firebase_uid }}">Check Sync Status</a><br>
+    <a href="http://127.0.0.1:1605/sync/list">View All Active Syncs</a>
+
+    <h2>Debug</h2>
+    <a href="http://127.0.0.1:1605/user/tokens/{{ firebase_uid }}">View Stored Tokens</a><br>
+    <a href="http://127.0.0.1:1605/spotify/now/{{ firebase_uid }}">Now Playing</a><br>
+
+    <h2>Slack Status</h2>
+    <form id="slackStatusForm">
+        <label>Status Text: <input type="text" id="statusText" name="status_text"></label><br>
+        <label>Status Emoji: <input type="text" id="statusEmoji" name="status_emoji"></label><br>
+        <button type="submit">Set Slack Status (broken right now)</button>
+    </form>
+
+    <script>
+    document.getElementById('slackStatusForm').addEventListener('submit', function(event) {
+        event.preventDefault();
+
+        const statusText = document.getElementById('statusText').value;
+        const statusEmoji = document.getElementById('statusEmoji').value;
+
+        const firebaseUid = '{{ firebase_uid }}'; 
+
+        fetch(`http://127.0.0.1:1605/slack/status/${firebaseUid}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                text: statusText,
+                emoji: statusEmoji
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if(data.success) {
+                alert('Slack-Status set successfully');
+            } else {
+                alert('Error: ' + (data.error || 'Unknown Error'));
+            }
+        })
+        .catch(error => {
+            alert('Fetch-Error: ' + error);
+        });
+    });
+    </script>
+
+
+    <h2>System</h2>
+    <a href="http://127.0.0.1:1605/health">Server Health</a>
+
+    <h2>Logout</h2>
+    <a href="/logout">Logout</a>
+</body>
+</html>
