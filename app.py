@@ -1,4 +1,4 @@
-from flask import Flask, redirect, request, session, render_template_string, jsonify
+from flask import Flask, redirect, request, session, render_template, jsonify
 import os
 import requests
 from dotenv import load_dotenv
@@ -71,169 +71,9 @@ def update_user_data(firebase_uid, data):
         print(f"Error updating user data: {e}")
         return False
 
-LOGIN_TEMPLATE = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Login - Account Connector</title>
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
-</head>
-<body>
-    <h1>Account Connector</h1>
-    
-    <div id="login-section">
-        <h2>Please log in with Firebase</h2>
-        <button onclick="signInWithEmail()">Sign In with Email</button>
-        <button onclick="signInWithGoogle()">Sign In with Google</button>
-        <div id="error-message"></div>
-    </div>
-    
-    <div id="user-info" style="display: none;">
-        <h2>Welcome!</h2>
-        <p>Email: <span id="user-email"></span></p>
-        <p>UID: <span id="user-uid"></span></p>
-        <button onclick="proceedToDashboard()">Go to Dashboard</button>
-        <button onclick="signOut()">Sign Out</button>
-    </div>
-
-    <script>
-        const firebaseConfig = {{ firebase_config | safe }};
-        firebase.initializeApp(firebaseConfig);
-        
-        const auth = firebase.auth();
-        
-        auth.onAuthStateChanged(function(user) {
-            if (user) {
-                document.getElementById('login-section').style.display = 'none';
-                document.getElementById('user-info').style.display = 'block';
-                document.getElementById('user-email').textContent = user.email;
-                document.getElementById('user-uid').textContent = user.uid;
-            } else {
-                document.getElementById('login-section').style.display = 'block';
-                document.getElementById('user-info').style.display = 'none';
-            }
-        });
-        
-        function signInWithEmail() {
-            const email = prompt("Enter your email:");
-            const password = prompt("Enter your password:");
-            
-            if (email && password) {
-                auth.signInWithEmailAndPassword(email, password)
-                .catch(function(error) {
-                    if (error.code === 'auth/user-not-found') {
-                        auth.createUserWithEmailAndPassword(email, password)
-                        .catch(function(createError) {
-                            showError(createError.message);
-                        });
-                    } else {
-                        showError(error.message);
-                    }
-                });
-            }
-        }
-        
-        function signInWithGoogle() {
-            const provider = new firebase.auth.GoogleAuthProvider();
-            auth.signInWithPopup(provider)
-            .catch(function(error) {
-                showError(error.message);
-            });
-        }
-        
-        function signOut() {
-            auth.signOut();
-        }
-        
-        function showError(message) {
-            document.getElementById('error-message').textContent = message;
-        }
-        
-        async function proceedToDashboard() {
-            try {
-                const user = auth.currentUser;
-                if (user) {
-                    const token = await user.getIdToken();
-                    
-                    const response = await fetch('/verify_token', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ idToken: token })
-                    });
-                    
-                    if (response.ok) {
-                        window.location.href = '/dashboard';
-                    } else {
-                        showError('Authentication failed');
-                    }
-                }
-            } catch (error) {
-                showError('Authentication error: ' + error.message);
-            }
-        }
-    </script>
-</body>
-</html>
-'''
-
-DASHBOARD_TEMPLATE = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Dashboard - Account Connector</title>
-</head>
-<body>
-    <h1>Account Dashboard</h1>
-    
-    <div>
-        <p><strong>Email:</strong> {{ user_email }}</p>
-        <p><strong>Firebase UID:</strong> {{ firebase_uid }}</p>
-        {% if last_login %}
-        <p><strong>Last Login:</strong> {{ last_login }}</p>
-        {% endif %}
-    </div>
-    
-    <button onclick="location.href='/logout'">Logout</button>
-    
-    <div>
-        <h2>Slack Account</h2>
-        <p>Status: {{ 'Connected' if slack_connected else 'Not Connected' }}</p>
-        {% if slack_connected %}
-            <p>Slack User ID: {{ slack_user_id }}</p>
-            {% if slack_connected_at %}
-            <p>Connected: {{ slack_connected_at }}</p>
-            {% endif %}
-            <button onclick="location.href='/slack/disconnect'">Disconnect Slack</button>
-        {% else %}
-            <p>Connect your Slack account to enable integration.</p>
-            <button onclick="location.href='/slack/login'">Connect Slack</button>
-        {% endif %}
-    </div>
-    
-    <div>
-        <h2>Spotify Account</h2>
-        <p>Status: {{ 'Connected' if spotify_connected else 'Not Connected' }}</p>
-        {% if spotify_connected %}
-            <p>Spotify account connected successfully.</p>
-            {% if spotify_connected_at %}
-            <p>Connected: {{ spotify_connected_at }}</p>
-            {% endif %}
-            <button onclick="location.href='/spotify/disconnect'">Disconnect Spotify</button>
-        {% else %}
-            <p>Connect your Spotify account to enable music integration.</p>
-            <button onclick="location.href='/spotify/login'">Connect Spotify</button>
-        {% endif %}
-    </div>
-</body>
-</html>
-'''
-
 @app.route("/")
 def index():
-    return render_template_string(LOGIN_TEMPLATE, firebase_config=json.dumps(FIREBASE_CONFIG))
+    return render_template('login.html', firebase_config=json.dumps(FIREBASE_CONFIG))
 
 @app.route("/verify_token", methods=["POST"])
 def verify_token():
@@ -260,9 +100,9 @@ def verify_token():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route("/dashboard")
+@app.route("/linked-accounts")
 @require_auth
-def dashboard():
+def linked_accounts():
     firebase_uid = session['firebase_uid']
     
     user_data = get_user_data(firebase_uid)
@@ -270,15 +110,15 @@ def dashboard():
     slack_data = user_data.get('slack', {})
     spotify_data = user_data.get('spotify', {})
     
-    return render_template_string(DASHBOARD_TEMPLATE,
-                                user_email=session.get('user_email'),
-                                firebase_uid=firebase_uid,
-                                last_login=user_data.get('last_login'),
-                                slack_connected=bool(slack_data.get('access_token')),
-                                slack_user_id=slack_data.get('user_id'),
-                                slack_connected_at=slack_data.get('connected_at'),
-                                spotify_connected=bool(spotify_data.get('access_token')),
-                                spotify_connected_at=spotify_data.get('connected_at'))
+    return render_template('linked_accounts.html',
+                         user_email=session.get('user_email'),
+                         firebase_uid=firebase_uid,
+                         last_login=user_data.get('last_login'),
+                         slack_connected=bool(slack_data.get('access_token')),
+                         slack_user_id=slack_data.get('user_id'),
+                         slack_connected_at=slack_data.get('connected_at'),
+                         spotify_connected=bool(spotify_data.get('access_token')),
+                         spotify_connected_at=spotify_data.get('connected_at'))
 
 @app.route("/logout")
 def logout():
@@ -352,7 +192,7 @@ def slack_callback():
         }
         update_user_data(firebase_uid, slack_data)
         
-        return "Slack linked successfully! <a href='/dashboard'>Return to Dashboard</a>"
+        return "Slack linked successfully! <a href='/linked-accounts'>Return to Linked Accounts</a>"
         
     except Exception as e:
         return f"Error: {str(e)}", 500
@@ -367,7 +207,7 @@ def slack_disconnect():
         'slack': firestore.DELETE_FIELD
     })
     
-    return redirect('/dashboard')
+    return redirect('/linked-accounts')
 
 @app.route("/spotify/login")
 @require_auth
@@ -417,7 +257,7 @@ def spotify_callback():
         }
         update_user_data(firebase_uid, spotify_data)
 
-        return "Spotify linked successfully! <a href='/dashboard'>Return to Dashboard</a>"
+        return "Spotify linked successfully! <a href='/linked-accounts'>Return to Linked Accounts</a>"
         
     except Exception as e:
         return f"Error: {str(e)}", 500
@@ -432,7 +272,7 @@ def spotify_disconnect():
         'spotify': firestore.DELETE_FIELD
     })
     
-    return redirect('/dashboard')
+    return redirect('/linked-accounts')
 
 @app.route("/api/user/tokens")
 @require_auth
