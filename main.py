@@ -405,6 +405,96 @@ def set_slack_status(firebase_uid):
         return jsonify({'success': True, 'message': 'Slack status updated and saved as original'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+global_status = {}  # firebase_uid -> {'text': str, 'emoji': str, 'last_update': str}
+status_threads = {}
+spotify_threads = {}
+spotify_active = {}  # firebase_uid -> bool
+
+def global_status_worker(firebase_uid):
+    while True:
+        if firebase_uid not in global_status:
+            time.sleep(30)
+            continue
+
+        slack_token, _, _ = get_user_tokens(firebase_uid)
+        if not slack_token:
+            time.sleep(30)
+            continue
+
+        status = global_status[firebase_uid]
+        try:
+            slack_client = WebClient(token=slack_token)
+            slack_client.users_profile_set(profile={
+                "status_text": status.get('text', ''),
+                "status_emoji": status.get('emoji', ''),
+                "status_expiration": 0
+            })
+            print(f"Global status updated for {firebase_uid}: {status.get('text', '')}")
+        except SlackApiError as e:
+            print(f"Failed to update Slack status for {firebase_uid}: {e.response['error']}")
+        time.sleep(30)
+
+def spotify_pull_worker(firebase_uid):
+    slack_token, spotify_token, spotify_refresh_token = get_user_tokens(firebase_uid)
+    sp = spotipy.Spotify(auth=spotify_token)
+
+    while spotify_active.get(firebase_uid, False):
+        try:
+            playback = sp.current_playback()
+            if playback and playback.get("is_playing"):
+                track = playback["item"]
+                if track:
+                    song_text = f"{track['name']} – {', '.join(a['name'] for a in track.get('artists', []))}"
+                    global_status[firebase_uid] = {
+                        'text': f"Listening to: {song_text}",
+                        'emoji': '🎵',
+                        'last_update': datetime.now().isoformat()
+                    }
+        except spotipy.exceptions.SpotifyException as e:
+            if e.http_status == 401:
+                new_token = refresh_spotify_token(firebase_uid, spotify_refresh_token)
+                if new_token:
+                    sp = spotipy.Spotify(auth=new_token)
+                else:
+                    print(f"Spotify token refresh failed for {firebase_uid}")
+            else:
+                print(f"Spotify API error for {firebase_uid}: {e}")
+        except Exception as e:
+            print(f"Spotify pull error for {firebase_uid}: {e}")
+
+        time.sleep(30)
+
+@app.route('/global/status/<firebase_uid>', methods=['POST'])
+def set_global_status(firebase_uid):
+    data = request.get_json()
+    text = data.get('text', '')
+    emoji = data.get('emoji', '')
+
+    global_status[firebase_uid] = {
+        'text': text,
+        'emoji': emoji,
+        'last_update': datetime.now().isoformat()
+    }
+
+    if firebase_uid not in status_threads:
+        t = threading.Thread(target=global_status_worker, args=(firebase_uid,), daemon=True)
+        t.start()
+        status_threads[firebase_uid] = t
+
+    return jsonify({'success': True, 'message': 'Global status updated'})
+
+@app.route('/spotify/pull/start/<firebase_uid>', methods=['POST'])
+def start_spotify_pull(firebase_uid):
+    spotify_active[firebase_uid] = True
+    t = threading.Thread(target=spotify_pull_worker, args=(firebase_uid,), daemon=True)
+    t.start()
+    spotify_threads[firebase_uid] = t
+    return jsonify({'success': True, 'message': f'Spotify pulling started for {firebase_uid}'})
+
+@app.route('/spotify/pull/stop/<firebase_uid>', methods=['POST'])
+def stop_spotify_pull(firebase_uid):
+    spotify_active[firebase_uid] = False
+    return jsonify({'success': True, 'message': f'Spotify pulling stopped for {firebase_uid}'})
 
 
 if __name__ == "__main__":
