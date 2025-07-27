@@ -257,10 +257,67 @@ def stop_sync(firebase_uid):
             'success': False
         }), 500
 
+@app.route('/sync/status/<firebase_uid>', methods=['GET'])
+def get_sync_status(firebase_uid):
+    """Get sync status for a specific user"""
+    try:
+        user_sync_status = sync_status.get(firebase_uid, {})
+        sync_running = firebase_uid in sync_threads and sync_threads[firebase_uid].is_alive()
+        
+        return jsonify({
+            'running': sync_running,
+            'active': user_sync_status.get('active', False),
+            'current_song': user_sync_status.get('current_song'),
+            'last_update': user_sync_status.get('last_update'),
+            'error_count': user_sync_status.get('error_count', 0),
+            'error': user_sync_status.get('error')
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'error': str(e),
+            'running': False
+        }), 500
+
+@app.route('/sync/list', methods=['GET'])
+def list_active_syncs():
+    """List all active sync sessions"""
+    try:
+        active_syncs = {}
+        for uid, status in sync_status.items():
+            if status.get('active', False):
+                active_syncs[uid] = {
+                    'current_song': status.get('current_song'),
+                    'last_update': status.get('last_update'),
+                    'error_count': status.get('error_count', 0)
+                }
+        
+        return jsonify({
+            'active_syncs': active_syncs,
+            'total_active': len(active_syncs)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'error': str(e)
+        }), 500
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'active_syncs': len([uid for uid, status in sync_status.items() if status.get('active', False)]),
+        'timestamp': datetime.now().isoformat()
+    })
+
 if __name__ == "__main__":
     print("Starting Spotify-Slack Sync Backend Server on port 1605...")
     print("Available endpoints:")
     print("  POST /sync/start/<firebase_uid> - Start sync for user")
     print("  POST /sync/stop/<firebase_uid> - Stop sync for user") 
+    print("  GET  /sync/status/<firebase_uid> - Get sync status for user")
+    print("  GET  /sync/list - List all active syncs")
+    print("  GET  /health - Health check")
     
     app.run(host="0.0.0.0", port=1605, debug=True)
