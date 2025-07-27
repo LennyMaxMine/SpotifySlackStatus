@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Linked Accounts - Account Connector</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        h2 {
+            color: #555;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 10px;
+        }
+        .user-info {
+            background-color: #f8f9fa;
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 30px;
+        }
+        .user-info p {
+            margin: 8px 0;
+            font-size: 16px;
+        }
+        .account-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+        }
+        .account-section h2 {
+            margin-top: 0;
+        }
+        .status-connected {
+            color: #28a745;
+            font-weight: bold;
+        }
+        .status-disconnected {
+            color: #dc3545;
+            font-weight: bold;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            margin: 10px 5px 10px 0;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            text-decoration: none;
+            display: inline-block;
+            box-sizing: border-box;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .btn-disconnect {
+            background-color: #dc3545;
+        }
+        .btn-disconnect:hover {
+            background-color: #c82333;
+        }
+        .btn-logout {
+            background-color: #6c757d;
+        }
+        .btn-logout:hover {
+            background-color: #545b62;
+        }
+        .account-details {
+            margin: 15px 0;
+            font-size: 14px;
+            color: #666;
+        }
+        .top-actions {
+            text-align: right;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="top-actions">
+            <button class="btn-logout" onclick="location.href='/logout'">Logout</button>
+        </div>
+        
+        <h1>Linked Accounts</h1>
+        
+        <div class="user-info">
+            <p><strong>Email:</strong> {{ user_email }}</p>
+            <p><strong>Firebase UID:</strong> {{ firebase_uid }}</p>
+            {% if last_login %}
+            <p><strong>Last Login:</strong> {{ last_login }}</p>
+            {% endif %}
+        </div>
+        
+        <div class="account-section">
+            <h2>Slack Account</h2>
+            <p>Status: <span class="{{ 'status-connected' if slack_connected else 'status-disconnected' }}">{{ 'Connected' if slack_connected else 'Not Connected' }}</span></p>
+            {% if slack_connected %}
+                <div class="account-details">
+                    <p><strong>Slack User ID:</strong> {{ slack_user_id }}</p>
+                    {% if slack_connected_at %}
+                    <p><strong>Connected:</strong> {{ slack_connected_at }}</p>
+                    {% endif %}
+                </div>
+                <button class="btn-disconnect" onclick="location.href='/slack/disconnect'">Disconnect Slack</button>
+            {% else %}
+                <p>Connect your Slack account to enable integration.</p>
+                <button onclick="location.href='/slack/login'">Connect Slack</button>
+            {% endif %}
+        </div>
+        
+        <div class="account-section">
+            <h2>Spotify Account</h2>
+            <p>Status: <span class="{{ 'status-connected' if spotify_connected else 'status-disconnected' }}">{{ 'Connected' if spotify_connected else 'Not Connected' }}</span></p>
+            {% if spotify_connected %}
+                <div class="account-details">
+                    <p><strong>Spotify account connected successfully.</strong></p>
+                    {% if spotify_connected_at %}
+                    <p><strong>Connected:</strong> {{ spotify_connected_at }}</p>
+                    {% endif %}
+                </div>
+                <button class="btn-disconnect" onclick="location.href='/spotify/disconnect'">Disconnect Spotify</button>
+            {% else %}
+                <p>Connect your Spotify account to enable music integration.</p>
+                <button onclick="location.href='/spotify/login'">Connect Spotify</button>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>
