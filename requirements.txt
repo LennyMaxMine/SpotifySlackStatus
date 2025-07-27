@@ -3,3 +3,4 @@ slack_sdk
 python-dotenv
 flask
 requests
+firebase_admin
