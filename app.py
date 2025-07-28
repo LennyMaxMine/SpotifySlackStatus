@@ -6,6 +6,7 @@ import firebase_admin
 from firebase_admin import credentials, auth, firestore
 import json
 from flask_cors import CORS
+from datetime import datetime
 
 
 load_dotenv()
@@ -434,7 +435,36 @@ def test_page():
     </html>
     '''
 
+def verify_token(id_token):
+    try:
+        decoded_token = auth.verify_id_token(id_token)
+        return decoded_token
+    except Exception:
+        return None
 
+@app.route("/api/user")
+def get_user():
+    id_token = request.cookies.get("firebase_token") or request.headers.get("Authorization")
+    if not id_token:
+        return jsonify({"authenticated": False}), 401
+
+    user = verify_token(id_token)
+    if user:
+        return jsonify({"authenticated": True, "user": {"uid": user["uid"], "displayName": user.get("name")}})
+    else:
+        return jsonify({"authenticated": False}), 401
+
+@app.route('/sessionLogin', methods=['POST'])
+def session_login():
+    id_token = request.json.get('idToken')
+    expires_in = datetime.timedelta(days=5)
+    try:
+        session_cookie = auth.create_session_cookie(id_token, expires_in=expires_in)
+        resp = jsonify({"status": "success"})
+        resp.set_cookie("firebase_token", session_cookie, httponly=True, secure=False, samesite="Lax")
+        return resp
+    except Exception as e:
+        return jsonify({"error": str(e)}), 401
 
 
 if __name__ == "__main__":
