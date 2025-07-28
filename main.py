@@ -8,16 +8,21 @@ from dotenv import load_dotenv
 import os
 import threading
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, auth
 from datetime import datetime
+from flask_cors import CORS
 
 load_dotenv()
 
 app = Flask(__name__)
 
+CORS(app, supports_credentials=True)
+
 cred = credentials.Certificate(os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY_PATH"))
 firebase_admin.initialize_app(cred)
 db = firestore.client()
+
+existing_services = ["YOUTUBE", "APPLE_MUSIC", "SPOTIFY"]
 
 sync_threads = {}
 sync_status = {}  
@@ -405,6 +410,8 @@ def set_slack_status(firebase_uid):
         return jsonify({'success': True, 'message': 'Slack status updated and saved as original'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+        
 global_status = {}  # firebase_uid -> {'text': str, 'emoji': str, 'last_update': str}
 status_threads = {}  # firebase_uid -> Thread
 spotify_threads = {}  # firebase_uid -> Thread
@@ -519,6 +526,128 @@ def stop_slack_worker(firebase_uid):
 def slack_worker_status_route(firebase_uid):
     active = slack_worker_status.get(firebase_uid, False)
     return jsonify({"success": True, "active": active})
+
+def get_user_data(firebase_uid):
+    try:
+        user_ref = db.collection('users').document(firebase_uid)
+        user_doc = user_ref.get()
+        if user_doc.exists:
+            return user_doc.to_dict()
+        return {}
+    except Exception as e:
+        print(f"Error getting user data: {e}")
+        return {}
+
+def update_user_data(firebase_uid, data):
+    try:
+        user_ref = db.collection('users').document(firebase_uid)
+        user_ref.set(data, merge=True)
+        return True
+    except Exception as e:
+        print(f"Error updating user data: {e}")
+        return False
+
+def check_if_source_exists(src):
+    for s in existing_services:
+        if src.lower() == s.lower():
+            return(True)
+    return(False)
+
+@app.route('/api/set_client_status/<firebase_uid>', methods=['POST'])
+def set_client_status(firebase_uid):
+    try:
+        id_token = request.headers.get('Authorization')
+        if not id_token or not id_token.startswith('Bearer '):
+            return jsonify({"error": "Missing or invalid Authorization header"}), 401
+        
+        id_token = id_token.split('Bearer ')[1]
+
+        decoded_token = auth.verify_id_token(id_token)
+        uid_from_token = decoded_token.get('uid')
+
+        if uid_from_token != firebase_uid:
+            return jsonify({"error": "UID mismatch"}), 403
+
+        data = request.get_json()
+        name = data.get('name')
+        artist = data.get('artist')
+        source = data.get('source')
+
+        if not all([name, artist, source]):
+            return jsonify({"error": "Missing name, artist or source"}), 400
+
+        field_name = f"last_{source.lower()}"
+        update_data = {
+            field_name: {
+                "name": name,
+                "artist": artist,
+                "updated": datetime.now().isoformat()
+            }
+        }
+
+        if check_if_source_exists(source) == False:
+            return jsonify({"error": f"Non existent service ({source.lower()})"}), 400
+
+        success = update_user_data(firebase_uid, update_data)
+        if success:
+            return jsonify({"status": "ok"}), 200
+        else:
+            return jsonify({"error": "Failed to update user data"}), 500
+
+    except Exception as e:
+        print(f"Error in set_client_status: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/set_priority/<firebase_uid>', methods=['POST'])
+def set_priority(firebase_uid):
+    try:
+        id_token = request.headers.get('Authorization')
+        if not id_token or not id_token.startswith('Bearer '):
+            return jsonify({"error": "Missing or invalid Authorization header"}), 401
+        
+        id_token = id_token.split('Bearer ')[1]
+
+        decoded_token = auth.verify_id_token(id_token)
+        uid_from_token = decoded_token.get('uid')
+
+        if uid_from_token != firebase_uid:
+            return jsonify({"error": "UID mismatch"}), 403
+
+        data = request.get_json()
+        list = data.get('list')
+
+        if not all([list]):
+            return jsonify({"error": "Missing name, artist or source"}), 400
+
+        str_list = ""
+
+        for item in list:
+            if check_if_source_exists(item) == False:
+                return jsonify({"error": f"Non existent service ({item.lower()})"}), 400
+
+            str_list = f"{str_list},{item}"
+        
+        if len(list) != len(existing_services):
+            return jsonify({"error": f"Missing services"}), 400 
+
+
+
+        field_name = f"priority"
+        update_data = {
+            field_name: {
+                "list": str_list,
+            }
+        }
+
+        success = update_user_data(firebase_uid, update_data)
+        if success:
+            return jsonify({"status": "ok"}), 200
+        else:
+            return jsonify({"error": "Failed to update user data"}), 500
+
+    except Exception as e:
+        print(f"Error in set_client_status: {e}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=1605, debug=True)

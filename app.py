@@ -314,6 +314,128 @@ def dashboard():
         spotify_connected_at=spotify_data.get('connected_at')
     )
 
+@app.route("/test")
+def test_page():
+    firebase_config = {
+        "apiKey": os.getenv("FIREBASE_API_KEY"),
+        "authDomain": os.getenv("FIREBASE_AUTH_DOMAIN"),
+        "projectId": os.getenv("FIREBASE_PROJECT_ID"),
+    }
+    return f'''
+    <!DOCTYPE html>
+    <html lang="de">
+    <head>
+      <meta charset="UTF-8" />
+      <title>API Testseite</title>
+      <style>
+        body {{ font-family: Arial, sans-serif; margin: 2rem; }}
+        label {{ display: block; margin-top: 1rem; }}
+        input {{ padding: 0.5rem; width: 300px; max-width: 100%; }}
+        button {{ margin-top: 1.5rem; padding: 0.5rem 1rem; font-size: 1rem; }}
+        .result {{ margin-top: 1rem; white-space: pre-wrap; background: #eee; padding: 1rem; border-radius: 5px; }}
+        hr {{ margin: 2rem 0; }}
+      </style>
+      <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+      <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    </head>
+    <body>
+      <h1>API Testseite</h1>
+
+      <h2>/api/set_client_status</h2>
+      <label for="name">Name (Fallback: apfel)</label>
+      <input type="text" id="name" placeholder="apfel" />
+
+      <label for="artist">Artist (Fallback: keksdose)</label>
+      <input type="text" id="artist" placeholder="keksdose" />
+
+      <label for="source">Source (Fallback: youtube)</label>
+      <input type="text" id="source" placeholder="youtube" />
+
+      <button id="sendStatusBtn">Status senden</button>
+      <div class="result" id="statusResult"></div>
+
+      <hr>
+
+      <h2>/api/set_priority</h2>
+      <label for="priorityList">Liste der Services (Komma getrennt, z. B. youtube,spotify,slack)</label>
+      <input type="text" id="priorityList" placeholder="youtube,spotify,slack" />
+
+      <button id="sendPriorityBtn">Priorität senden</button>
+      <div class="result" id="priorityResult"></div>
+
+      <script>
+        const firebaseConfig = {json.dumps(firebase_config)};
+        firebase.initializeApp(firebaseConfig);
+
+        firebase.auth().signInAnonymously().catch(e => console.error("Login Fehler:", e));
+
+        document.getElementById('sendStatusBtn').addEventListener('click', async () => {{
+          const resultDiv = document.getElementById('statusResult');
+          try {{
+            const user = firebase.auth().currentUser;
+            if (!user) {{
+              alert("Nicht eingeloggt");
+              return;
+            }}
+            const idToken = await user.getIdToken();
+            const firebase_uid = user.uid;
+
+            const name = document.getElementById('name').value.trim() || "apfel";
+            const artist = document.getElementById('artist').value.trim() || "keksdose";
+            const source = document.getElementById('source').value.trim() || "youtube";
+
+            const payload = {{ name, artist, source }};
+            const response = await fetch(`http://localhost:1605/api/set_client_status/${{firebase_uid}}`, {{
+              method: "POST",
+              headers: {{
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + idToken
+              }},
+              body: JSON.stringify(payload)
+            }});
+            const json = await response.json();
+            resultDiv.textContent = JSON.stringify(json, null, 2);
+          }} catch (e) {{
+            resultDiv.textContent = "Fehler beim Senden: " + e.message;
+          }}
+        }});
+
+        document.getElementById('sendPriorityBtn').addEventListener('click', async () => {{
+          const resultDiv = document.getElementById('priorityResult');
+          try {{
+            const user = firebase.auth().currentUser;
+            if (!user) {{
+              alert("Nicht eingeloggt");
+              return;
+            }}
+            const idToken = await user.getIdToken();
+            const firebase_uid = user.uid;
+
+            const listRaw = document.getElementById('priorityList').value.trim() || "youtube,spotify,slack";
+            const list = listRaw.split(",").map(s => s.trim()).filter(Boolean);
+
+            const payload = {{ list }};
+            const response = await fetch(`http://localhost:1605/api/set_priority/${{firebase_uid}}`, {{
+              method: "POST",
+              headers: {{
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + idToken
+              }},
+              body: JSON.stringify(payload)
+            }});
+            const json = await response.json();
+            resultDiv.textContent = JSON.stringify(json, null, 2);
+          }} catch (e) {{
+            resultDiv.textContent = "Fehler beim Senden: " + e.message;
+          }}
+        }});
+      </script>
+    </body>
+    </html>
+    '''
+
+
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8888, debug=True)
