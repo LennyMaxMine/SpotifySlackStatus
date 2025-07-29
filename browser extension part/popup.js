@@ -215,3 +215,108 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 });
+
+async function findPlayingTrack() {
+    const tabs = await chrome.tabs.query({
+      url: ['*://*.youtube.com/*', '*://*.soundcloud.com/*', '*://*.music.apple.com/*']
+    });
+  
+    for (const tab of tabs) {
+      try {
+        if (tab.url.includes('youtube.com')) {
+          const [result] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => {
+              const video = document.querySelector('video');
+              if (!video || video.paused) return null;
+  
+              let title = document.querySelector('.title.style-scope.ytd-video-primary-info-renderer')?.textContent || document.title;
+  
+              title = title.replace(/^\(\d+\)\s*-\s*/, '');
+              title = title.replace(/\s*-\s*YouTube$/, '');
+              
+              const artist = document.querySelector('#text-container yt-formatted-string.ytd-channel-name')?.textContent || null;
+  
+              return { title, artist, source: 'youtube' };
+            }
+          });
+          if (result.result) return result.result;
+        } else if (tab.url.includes('soundcloud.com')) {
+            const [result] = await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              func: () => {
+                const playButton = document.querySelector('.playControl.playing');
+                if (!playButton) return null;
+          
+                let title = document.querySelector('.playbackSoundBadge__titleLink')?.textContent || '';
+                const artist = document.querySelector('.playbackSoundBadge__lightLink')?.textContent 
+                            || document.querySelector('.playbackSoundBadge__userLink')?.textContent 
+                            || null;
+          
+                if (!title || !artist) return null;
+          
+                function removeDuplicate(str) {
+                  const len = str.length;
+                  for (let i = 1; i <= len / 2; i++) {
+                    const part = str.slice(0, i);
+                    if (part.repeat(2) === str) {
+                      return part;
+                    }
+                  }
+                  return str;
+                }
+          
+                title = removeDuplicate(title).trim();
+          
+                return { title, artist, source: 'soundcloud' };
+              }
+            });
+            if (result.result) return result.result;
+          }
+          
+          
+  
+  
+      } catch (e) {
+        console.error(`Fehler bei Tab ${tab.url}:`, e);
+      }
+    }
+    return null;
+  }
+  
+  
+  
+  
+
+
+document.addEventListener('DOMContentLoaded', () => {
+    const artistDiv = document.getElementById('track-artist');
+    const titleDiv = document.getElementById('track-title');
+    const sourceDiv = document.getElementById('track-source');
+  
+    async function updateTrack() {
+      try {
+        const track = await findPlayingTrack();
+  
+        if (track) {
+          artistDiv.textContent = `Artist: ${track.artist || 'Unbekannt'}`;
+          titleDiv.textContent = `Title: ${track.title || 'Unbekannt'}`;
+          sourceDiv.textContent = `Source: ${track.source || 'Unbekannt'}`;
+        } else {
+          artistDiv.textContent = 'Artist: -';
+          titleDiv.textContent = 'Title: -';
+          sourceDiv.textContent = 'Source: -';
+        }
+      } catch (error) {
+        console.error('Fehler beim Track holen:', error);
+        artistDiv.textContent = 'Artist: Fehler';
+        titleDiv.textContent = 'Title: Fehler';
+        sourceDiv.textContent = 'Source: Fehler';
+      }
+    }
+  
+    updateTrack();
+    setInterval(updateTrack, 5000);
+  });
+  
+  
