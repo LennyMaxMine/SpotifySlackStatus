@@ -27,176 +27,6 @@ existing_services = ["YOUTUBE", "APPLE_MUSIC", "SPOTIFY"]
 sync_threads = {}
 sync_status = {}  
 
-def get_user_tokens(firebase_uid):
-    try:
-        user_ref = db.collection('users').document(firebase_uid)
-        user_doc = user_ref.get()
-        if user_doc.exists:
-            user_data = user_doc.to_dict()
-            slack_token = user_data.get('slack', {}).get('access_token')
-            spotify_access_token = user_data.get('spotify', {}).get('access_token')
-            spotify_refresh_token = user_data.get('spotify', {}).get('refresh_token')
-            return slack_token, spotify_access_token, spotify_refresh_token
-        return None, None, None
-    except Exception as e:
-        print(f"Error getting user tokens: {e}")
-        return None, None, None
-
-def refresh_spotify_token(firebase_uid, refresh_token):
-    try:
-        sp_oauth = SpotifyOAuth(
-            client_id=os.getenv("SPOTIPY_CLIENT_ID"),
-            client_secret=os.getenv("SPOTIPY_CLIENT_SECRET"),
-            redirect_uri="127.0.0.1:1605/callback", #os.getenv("SPOTIPY_REDIRECT_URI"),
-            scope="user-read-playback-state"
-        )
-        
-        token_info = sp_oauth.refresh_access_token(refresh_token)
-        new_access_token = token_info['access_token']
-        
-        user_ref = db.collection('users').document(firebase_uid)
-        user_ref.update({
-            'spotify.access_token': new_access_token
-        })
-        
-        return new_access_token
-    except Exception as e:
-        print(f"Error refreshing Spotify token: {e}")
-        return None
-
-def spotify_slack_sync(firebase_uid):
-    try:
-        slack_token, spotify_token, spotify_refresh_token = get_user_tokens(firebase_uid)
-        
-        if not slack_token or not spotify_token:
-            sync_status[firebase_uid] = {
-                'active': False,
-                'error': 'Missing tokens',
-                'last_update': datetime.now().isoformat()
-            }
-            return
-        
-        slack_client = WebClient(token=slack_token)
-        sp = spotipy.Spotify(auth=spotify_token)
-        
-        try:
-            original_status_response = slack_client.users_profile_get()
-            original_status_text = original_status_response["profile"]["status_text"]
-            original_status_emoji = original_status_response["profile"]["status_emoji"]
-        except Exception as e:
-            print(f"Error getting original status: {e}")
-            original_status_text = ""
-            original_status_emoji = ""
-        
-        last_status = None
-        error_count = 0
-        
-        sync_status[firebase_uid] = {
-            'active': True,
-            'current_song': None,
-            'last_update': datetime.now().isoformat(),
-            'error_count': 0,
-            'original_status': {'text': original_status_text, 'emoji': original_status_emoji}
-        }
-        
-        print(f"Started sync for user {firebase_uid}")
-        print(f"Original status: {original_status_emoji} | {original_status_text}")
-        
-        while sync_status.get(firebase_uid, {}).get('active', False):
-            try:
-                try:
-                    playback = sp.current_playback()
-                except spotipy.exceptions.SpotifyException as e:
-                    if e.http_status == 401:
-                        print(f"Spotify token expired for user {firebase_uid}, refreshing...")
-                        new_token = refresh_spotify_token(firebase_uid, spotify_refresh_token)
-                        if new_token:
-                            sp = spotipy.Spotify(auth=new_token)
-                            playback = sp.current_playback()
-                        else:
-                            raise Exception("Failed to refresh Spotify token")
-                    else:
-                        raise e
-                
-                if playback and playback.get("is_playing"):
-                    track = playback["item"]
-                    if track:
-                        name = track["name"]
-                        artists = track.get("artists", [])
-                        if artists:
-                            artist = ", ".join([a["name"] for a in artists])
-                        else:
-                            artist = "Unknown Artist"
-                        
-                        status_text = f"{name} – {artist}"
-                        
-                        if status_text != last_status:
-                            try:
-                                slack_client.users_profile_set(profile={
-                                    "status_text": f"Listening to: {status_text}",
-                                    "status_emoji": "🎵",
-                                    "status_expiration": 0
-                                })
-                                last_status = status_text
-                                sync_status[firebase_uid]['current_song'] = status_text
-                                sync_status[firebase_uid]['last_update'] = datetime.now().isoformat()
-                                print(f"Updated status for {firebase_uid}: {status_text}")
-                            except SlackApiError as e:
-                                print(f"Slack API error: {e.response['error']}")
-                                error_count += 1
-                else:
-                    if last_status != original_status_text:
-                        try:
-                            slack_client.users_profile_set(profile={
-                                "status_text": original_status_text,
-                                "status_emoji": original_status_emoji,
-                                "status_expiration": 0
-                            })
-                            last_status = original_status_text
-                            sync_status[firebase_uid]['current_song'] = None
-                            sync_status[firebase_uid]['last_update'] = datetime.now().isoformat()
-                            print(f"Restored original status for {firebase_uid}")
-                        except SlackApiError as e:
-                            print(f"Slack API error: {e.response['error']}")
-                            error_count += 1
-                
-                error_count = 0
-                sync_status[firebase_uid]['error_count'] = 0
-                
-                time.sleep(30)
-                
-            except Exception as e:
-                error_count += 1
-                sync_status[firebase_uid]['error_count'] = error_count
-                sync_status[firebase_uid]['last_update'] = datetime.now().isoformat()
-                print(f"Sync error for user {firebase_uid}: {e}")
-                
-                if error_count > 3:
-                    print(f"Too many errors for user {firebase_uid}, stopping sync")
-                    try:
-                        slack_client.users_profile_set(profile={
-                            "status_text": original_status_text,
-                            "status_emoji": original_status_emoji,
-                            "status_expiration": 0
-                        })
-                    except:
-                        pass
-                    break
-                
-                time.sleep(10)
-    
-    except Exception as e:
-        print(f"Critical error in sync thread for user {firebase_uid}: {e}")
-        if firebase_uid in sync_status:
-            sync_status[firebase_uid]['error'] = str(e)
-    
-    finally:
-        if firebase_uid in sync_status:
-            sync_status[firebase_uid]['active'] = False
-        if firebase_uid in sync_threads:
-            del sync_threads[firebase_uid]
-        print(f"Sync stopped for user {firebase_uid}")
-
 @app.route('/sync/start/<firebase_uid>', methods=['POST'])
 def start_sync(firebase_uid):
     try:
@@ -648,6 +478,39 @@ def set_priority(firebase_uid):
     except Exception as e:
         print(f"Error in set_client_status: {e}")
         return jsonify({"error": str(e)}), 500
+
+
+def verify_token(id_token):
+    try:
+        decoded_token = auth.verify_id_token(id_token)
+        return decoded_token
+    except Exception:
+        return None
+
+@app.route("/api/user")
+def get_user():
+    id_token = request.cookies.get("firebase_token") or request.headers.get("Authorization")
+    if not id_token:
+        return jsonify({"authenticated": False}), 401
+
+    user = verify_token(id_token)
+    if user:
+        return jsonify({"authenticated": True, "user": {"uid": user["uid"], "displayName": user.get("name")}})
+    else:
+        return jsonify({"authenticated": False}), 401
+
+@app.route('/sessionLogin', methods=['POST'])
+def session_login():
+    id_token = request.json.get('idToken')
+    expires_in = datetime.timedelta(days=5)
+    try:
+        session_cookie = auth.create_session_cookie(id_token, expires_in=expires_in)
+        resp = jsonify({"status": "success"})
+        resp.set_cookie("firebase_token", session_cookie, httponly=True, secure=False, samesite="Lax")
+        return resp
+    except Exception as e:
+        return jsonify({"error": str(e)}), 401
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=1605, debug=True)

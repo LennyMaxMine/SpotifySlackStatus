@@ -7,7 +7,12 @@ from firebase_admin import credentials, auth, firestore
 import json
 from flask_cors import CORS
 from datetime import datetime
-
+import spotipy
+from spotipy.oauth2 import SpotifyOAuth
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+import time
+import threading
 
 load_dotenv()
 
@@ -37,6 +42,8 @@ FIREBASE_CONFIG = {
     "messagingSenderId": os.getenv("FIREBASE_MESSAGING_SENDER_ID"),
     "appId": os.getenv("FIREBASE_APP_ID")
 }
+
+existing_services = ["YOUTUBE", "APPLE_MUSIC", "SPOTIFY"]
 
 def verify_firebase_token(id_token):
     try:
@@ -76,9 +83,322 @@ def update_user_data(firebase_uid, data):
         print(f"Error updating user data: {e}")
         return False
 
+def get_user_tokens(firebase_uid):
+    try:
+        user_ref = db.collection('users').document(firebase_uid)
+        user_doc = user_ref.get()
+        if user_doc.exists:
+            user_data = user_doc.to_dict()
+            slack_token = user_data.get('slack', {}).get('access_token')
+            spotify_access_token = user_data.get('spotify', {}).get('access_token')
+            spotify_refresh_token = user_data.get('spotify', {}).get('refresh_token')
+            return slack_token, spotify_access_token, spotify_refresh_token
+        return None, None, None
+    except Exception as e:
+        print(f"Error getting user tokens: {e}")
+        return None, None, None
+
+def refresh_spotify_token(firebase_uid, refresh_token):
+    try:
+        sp_oauth = SpotifyOAuth(
+            client_id=os.getenv("SPOTIPY_CLIENT_ID"),
+            client_secret=os.getenv("SPOTIPY_CLIENT_SECRET"),
+            redirect_uri="127.0.0.1:8888/callback", #os.getenv("SPOTIPY_REDIRECT_URI"),
+            scope="user-read-playback-state"
+        )
+        
+        token_info = sp_oauth.refresh_access_token(refresh_token)
+        new_access_token = token_info['access_token']
+        
+        user_ref = db.collection('users').document(firebase_uid)
+        user_ref.update({
+            'spotify.access_token': new_access_token
+        })
+        
+        return new_access_token
+    except Exception as e:
+        print(f"Error refreshing Spotify token: {e}")
+        return None
+
+
+# Slack Syncing
+
+sync_threads = {}
+sync_status = {}  
+
+def get_current_track_from_priority(user_data):
+    priority_list = user_data.get("priority", {}).get("list", "")
+    if not priority_list:
+        return None
+
+    services = [s.strip() for s in priority_list.split(",") if s.strip()]
+    for service in services:
+        field = f"last_{service.lower()}"
+        if field in user_data and user_data[field]:
+            return user_data[field]
+    return None
+
+def slack_sync_worker(firebase_uid):
+    slack_token, _, _ = get_user_tokens(firebase_uid)
+    if not slack_token:
+        sync_status[firebase_uid]['active'] = False
+        sync_status[firebase_uid]['error'] = "No Slack token"
+        return
+
+    slack_client = WebClient(token=slack_token)
+
+    while sync_status.get(firebase_uid, {}).get('active', False):
+        try:
+            user_data = get_user_data(firebase_uid)
+            if not user_data:
+                sync_status[firebase_uid]['error'] = "User not found"
+                time.sleep(10)
+                continue
+
+            track = get_current_track_from_priority(user_data)
+            if not track:
+                sync_status[firebase_uid]['error'] = "No track found"
+                time.sleep(10)
+                continue
+
+            status_text = f"{track['artist']} – {track['name']}"
+            slack_client.users_profile_set(profile={
+                "status_text": status_text,
+                "status_emoji": ":musical_note:",
+                "status_expiration": 0
+            })
+
+            sync_status[firebase_uid]['current_song'] = status_text
+            sync_status[firebase_uid]['last_update'] = datetime.now().isoformat()
+            sync_status[firebase_uid]['error'] = None
+            time.sleep(15)
+
+        except Exception as e:
+            sync_status[firebase_uid]['error'] = str(e)
+            sync_status[firebase_uid]['error_count'] = sync_status[firebase_uid].get('error_count', 0) + 1
+            time.sleep(10)
+
+@app.route('/sync/start/<firebase_uid>', methods=['POST'])
+def start_sync(firebase_uid):
+    try:
+        slack_token, _, _ = get_user_tokens(firebase_uid)
+        if not slack_token:
+            return jsonify({"error": "Slack account not connected", "success": False}), 400
+
+        if firebase_uid in sync_status:
+            sync_status[firebase_uid]['active'] = False
+            time.sleep(1)
+
+        sync_status[firebase_uid] = {
+            'active': True,
+            'current_song': None,
+            'last_update': None,
+            'error': None,
+            'error_count': 0
+        }
+
+        thread = threading.Thread(target=slack_sync_worker, args=(firebase_uid,), daemon=True)
+        thread.start()
+        sync_threads[firebase_uid] = thread
+
+        return jsonify({'success': True, 'message': f'Slack sync started for {firebase_uid}'})
+    except Exception as e:
+        return jsonify({'error': str(e), 'success': False}), 500
+
+@app.route('/sync/stop/<firebase_uid>', methods=['POST'])
+def stop_sync(firebase_uid):
+    try:
+        if firebase_uid in sync_status:
+            sync_status[firebase_uid]['active'] = False
+        return jsonify({'success': True, 'message': f'Slack sync stopped for {firebase_uid}'})
+    except Exception as e:
+        return jsonify({'error': str(e), 'success': False}), 500
+
+@app.route('/sync/status/<firebase_uid>', methods=['GET'])
+def get_sync_status(firebase_uid):
+    try:
+        status = sync_status.get(firebase_uid, {})
+        running = firebase_uid in sync_threads and sync_threads[firebase_uid].is_alive()
+        return jsonify({
+            'running': running,
+            'active': status.get('active', False),
+            'current_song': status.get('current_song'),
+            'last_update': status.get('last_update'),
+            'error': status.get('error'),
+            'error_count': status.get('error_count', 0)
+        })
+    except Exception as e:
+        return jsonify({'error': str(e), 'running': False}), 500
+
+
+# Pages
+
 @app.route("/")
 def index():
     return render_template('login.html', firebase_config=json.dumps(FIREBASE_CONFIG))
+
+@app.route("/linked-accounts")
+@require_auth
+def linked_accounts():
+    firebase_uid = session['firebase_uid']
+    
+    user_data = get_user_data(firebase_uid)
+    
+    slack_data = user_data.get('slack', {})
+    spotify_data = user_data.get('spotify', {})
+    
+    return render_template('linked_accounts.html',
+                         user_email=session.get('user_email'),
+                         firebase_uid=firebase_uid,
+                         last_login=user_data.get('last_login'),
+                         slack_connected=bool(slack_data.get('access_token')),
+                         slack_user_id=slack_data.get('user_id'),
+                         slack_connected_at=slack_data.get('connected_at'),
+                         spotify_connected=bool(spotify_data.get('access_token')),
+                         spotify_connected_at=spotify_data.get('connected_at'))
+
+@app.route("/dashboard")
+@require_auth
+def dashboard():
+    firebase_uid = session['firebase_uid']
+    user_data = get_user_data(firebase_uid)
+
+    slack_data = user_data.get('slack', {})
+    spotify_data = user_data.get('spotify', {})
+
+    return render_template(
+        'dashboard.html',
+        user_email=session.get('user_email'),
+        firebase_uid=firebase_uid,
+        slack_connected=bool(slack_data.get('access_token')),
+        slack_user_id=slack_data.get('user_id'),
+        slack_connected_at=slack_data.get('connected_at'),
+        spotify_connected=bool(spotify_data.get('access_token')),
+        spotify_connected_at=spotify_data.get('connected_at')
+    )
+
+@app.route("/test")
+def test_page():
+    firebase_config = {
+        "apiKey": os.getenv("FIREBASE_API_KEY"),
+        "authDomain": os.getenv("FIREBASE_AUTH_DOMAIN"),
+        "projectId": os.getenv("FIREBASE_PROJECT_ID"),
+    }
+    return f'''
+    <!DOCTYPE html>
+    <html lang="de">
+    <head>
+      <meta charset="UTF-8" />
+      <title>API Testseite</title>
+      <style>
+        body {{ font-family: Arial, sans-serif; margin: 2rem; }}
+        label {{ display: block; margin-top: 1rem; }}
+        input {{ padding: 0.5rem; width: 300px; max-width: 100%; }}
+        button {{ margin-top: 1.5rem; padding: 0.5rem 1rem; font-size: 1rem; }}
+        .result {{ margin-top: 1rem; white-space: pre-wrap; background: #eee; padding: 1rem; border-radius: 5px; }}
+        hr {{ margin: 2rem 0; }}
+      </style>
+      <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+      <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    </head>
+    <body>
+      <h1>API Testseite</h1>
+
+      <h2>/api/set_client_status</h2>
+      <label for="name">Name (Fallback: apfel)</label>
+      <input type="text" id="name" placeholder="apfel" />
+
+      <label for="artist">Artist (Fallback: keksdose)</label>
+      <input type="text" id="artist" placeholder="keksdose" />
+
+      <label for="source">Source (Fallback: youtube)</label>
+      <input type="text" id="source" placeholder="youtube" />
+
+      <button id="sendStatusBtn">Status senden</button>
+      <div class="result" id="statusResult"></div>
+
+      <hr>
+
+      <h2>/api/set_priority</h2>
+      <label for="priorityList">Liste der Services (Komma getrennt, z. B. youtube,spotify,slack)</label>
+      <input type="text" id="priorityList" placeholder="youtube,spotify,slack" />
+
+      <button id="sendPriorityBtn">Priorität senden</button>
+      <div class="result" id="priorityResult"></div>
+
+      <script>
+        const firebaseConfig = {json.dumps(firebase_config)};
+        firebase.initializeApp(firebaseConfig);
+
+        firebase.auth().signInAnonymously().catch(e => console.error("Login Fehler:", e));
+
+        document.getElementById('sendStatusBtn').addEventListener('click', async () => {{
+          const resultDiv = document.getElementById('statusResult');
+          try {{
+            const user = firebase.auth().currentUser;
+            if (!user) {{
+              alert("Nicht eingeloggt");
+              return;
+            }}
+            const idToken = await user.getIdToken();
+            const firebase_uid = user.uid;
+
+            const name = document.getElementById('name').value.trim() || "apfel";
+            const artist = document.getElementById('artist').value.trim() || "keksdose";
+            const source = document.getElementById('source').value.trim() || "youtube";
+
+            const payload = {{ name, artist, source }};
+            const response = await fetch(`http://localhost:8888/api/set_client_status/${{firebase_uid}}`, {{
+              method: "POST",
+              headers: {{
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + idToken
+              }},
+              body: JSON.stringify(payload)
+            }});
+            const json = await response.json();
+            resultDiv.textContent = JSON.stringify(json, null, 2);
+          }} catch (e) {{
+            resultDiv.textContent = "Fehler beim Senden: " + e.message;
+          }}
+        }});
+
+        document.getElementById('sendPriorityBtn').addEventListener('click', async () => {{
+          const resultDiv = document.getElementById('priorityResult');
+          try {{
+            const user = firebase.auth().currentUser;
+            if (!user) {{
+              alert("Nicht eingeloggt");
+              return;
+            }}
+            const idToken = await user.getIdToken();
+            const firebase_uid = user.uid;
+
+            const listRaw = document.getElementById('priorityList').value.trim() || "youtube,spotify,slack";
+            const list = listRaw.split(",").map(s => s.trim()).filter(Boolean);
+
+            const payload = {{ list }};
+            const response = await fetch(`http://localhost:8888/api/set_priority/${{firebase_uid}}`, {{
+              method: "POST",
+              headers: {{
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + idToken
+              }},
+              body: JSON.stringify(payload)
+            }});
+            const json = await response.json();
+            resultDiv.textContent = JSON.stringify(json, null, 2);
+          }} catch (e) {{
+            resultDiv.textContent = "Fehler beim Senden: " + e.message;
+          }}
+        }});
+      </script>
+    </body>
+    </html>
+    '''
+
+
+# Oauth
 
 @app.route("/verify_token", methods=["POST"])
 def verify_token():
@@ -104,26 +424,6 @@ def verify_token():
             
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-@app.route("/linked-accounts")
-@require_auth
-def linked_accounts():
-    firebase_uid = session['firebase_uid']
-    
-    user_data = get_user_data(firebase_uid)
-    
-    slack_data = user_data.get('slack', {})
-    spotify_data = user_data.get('spotify', {})
-    
-    return render_template('linked_accounts.html',
-                         user_email=session.get('user_email'),
-                         firebase_uid=firebase_uid,
-                         last_login=user_data.get('last_login'),
-                         slack_connected=bool(slack_data.get('access_token')),
-                         slack_user_id=slack_data.get('user_id'),
-                         slack_connected_at=slack_data.get('connected_at'),
-                         spotify_connected=bool(spotify_data.get('access_token')),
-                         spotify_connected_at=spotify_data.get('connected_at'))
 
 @app.route("/logout")
 def logout():
@@ -295,176 +595,6 @@ def get_user_tokens():
         }
     })
 
-@app.route("/dashboard")
-@require_auth
-def dashboard():
-    firebase_uid = session['firebase_uid']
-    user_data = get_user_data(firebase_uid)
-
-    slack_data = user_data.get('slack', {})
-    spotify_data = user_data.get('spotify', {})
-
-    return render_template(
-        'dashboard.html',
-        user_email=session.get('user_email'),
-        firebase_uid=firebase_uid,
-        slack_connected=bool(slack_data.get('access_token')),
-        slack_user_id=slack_data.get('user_id'),
-        slack_connected_at=slack_data.get('connected_at'),
-        spotify_connected=bool(spotify_data.get('access_token')),
-        spotify_connected_at=spotify_data.get('connected_at')
-    )
-
-@app.route("/test")
-def test_page():
-    firebase_config = {
-        "apiKey": os.getenv("FIREBASE_API_KEY"),
-        "authDomain": os.getenv("FIREBASE_AUTH_DOMAIN"),
-        "projectId": os.getenv("FIREBASE_PROJECT_ID"),
-    }
-    return f'''
-    <!DOCTYPE html>
-    <html lang="de">
-    <head>
-      <meta charset="UTF-8" />
-      <title>API Testseite</title>
-      <style>
-        body {{ font-family: Arial, sans-serif; margin: 2rem; }}
-        label {{ display: block; margin-top: 1rem; }}
-        input {{ padding: 0.5rem; width: 300px; max-width: 100%; }}
-        button {{ margin-top: 1.5rem; padding: 0.5rem 1rem; font-size: 1rem; }}
-        .result {{ margin-top: 1rem; white-space: pre-wrap; background: #eee; padding: 1rem; border-radius: 5px; }}
-        hr {{ margin: 2rem 0; }}
-      </style>
-      <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-      <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
-    </head>
-    <body>
-      <h1>API Testseite</h1>
-
-      <h2>/api/set_client_status</h2>
-      <label for="name">Name (Fallback: apfel)</label>
-      <input type="text" id="name" placeholder="apfel" />
-
-      <label for="artist">Artist (Fallback: keksdose)</label>
-      <input type="text" id="artist" placeholder="keksdose" />
-
-      <label for="source">Source (Fallback: youtube)</label>
-      <input type="text" id="source" placeholder="youtube" />
-
-      <button id="sendStatusBtn">Status senden</button>
-      <div class="result" id="statusResult"></div>
-
-      <hr>
-
-      <h2>/api/set_priority</h2>
-      <label for="priorityList">Liste der Services (Komma getrennt, z. B. youtube,spotify,slack)</label>
-      <input type="text" id="priorityList" placeholder="youtube,spotify,slack" />
-
-      <button id="sendPriorityBtn">Priorität senden</button>
-      <div class="result" id="priorityResult"></div>
-
-      <script>
-        const firebaseConfig = {json.dumps(firebase_config)};
-        firebase.initializeApp(firebaseConfig);
-
-        firebase.auth().signInAnonymously().catch(e => console.error("Login Fehler:", e));
-
-        document.getElementById('sendStatusBtn').addEventListener('click', async () => {{
-          const resultDiv = document.getElementById('statusResult');
-          try {{
-            const user = firebase.auth().currentUser;
-            if (!user) {{
-              alert("Nicht eingeloggt");
-              return;
-            }}
-            const idToken = await user.getIdToken();
-            const firebase_uid = user.uid;
-
-            const name = document.getElementById('name').value.trim() || "apfel";
-            const artist = document.getElementById('artist').value.trim() || "keksdose";
-            const source = document.getElementById('source').value.trim() || "youtube";
-
-            const payload = {{ name, artist, source }};
-            const response = await fetch(`http://localhost:1605/api/set_client_status/${{firebase_uid}}`, {{
-              method: "POST",
-              headers: {{
-                "Content-Type": "application/json",
-                "Authorization": "Bearer " + idToken
-              }},
-              body: JSON.stringify(payload)
-            }});
-            const json = await response.json();
-            resultDiv.textContent = JSON.stringify(json, null, 2);
-          }} catch (e) {{
-            resultDiv.textContent = "Fehler beim Senden: " + e.message;
-          }}
-        }});
-
-        document.getElementById('sendPriorityBtn').addEventListener('click', async () => {{
-          const resultDiv = document.getElementById('priorityResult');
-          try {{
-            const user = firebase.auth().currentUser;
-            if (!user) {{
-              alert("Nicht eingeloggt");
-              return;
-            }}
-            const idToken = await user.getIdToken();
-            const firebase_uid = user.uid;
-
-            const listRaw = document.getElementById('priorityList').value.trim() || "youtube,spotify,slack";
-            const list = listRaw.split(",").map(s => s.trim()).filter(Boolean);
-
-            const payload = {{ list }};
-            const response = await fetch(`http://localhost:1605/api/set_priority/${{firebase_uid}}`, {{
-              method: "POST",
-              headers: {{
-                "Content-Type": "application/json",
-                "Authorization": "Bearer " + idToken
-              }},
-              body: JSON.stringify(payload)
-            }});
-            const json = await response.json();
-            resultDiv.textContent = JSON.stringify(json, null, 2);
-          }} catch (e) {{
-            resultDiv.textContent = "Fehler beim Senden: " + e.message;
-          }}
-        }});
-      </script>
-    </body>
-    </html>
-    '''
-
-def verify_token(id_token):
-    try:
-        decoded_token = auth.verify_id_token(id_token)
-        return decoded_token
-    except Exception:
-        return None
-
-@app.route("/api/user")
-def get_user():
-    id_token = request.cookies.get("firebase_token") or request.headers.get("Authorization")
-    if not id_token:
-        return jsonify({"authenticated": False}), 401
-
-    user = verify_token(id_token)
-    if user:
-        return jsonify({"authenticated": True, "user": {"uid": user["uid"], "displayName": user.get("name")}})
-    else:
-        return jsonify({"authenticated": False}), 401
-
-@app.route('/sessionLogin', methods=['POST'])
-def session_login():
-    id_token = request.json.get('idToken')
-    expires_in = datetime.timedelta(days=5)
-    try:
-        session_cookie = auth.create_session_cookie(id_token, expires_in=expires_in)
-        resp = jsonify({"status": "success"})
-        resp.set_cookie("firebase_token", session_cookie, httponly=True, secure=False, samesite="Lax")
-        return resp
-    except Exception as e:
-        return jsonify({"error": str(e)}), 401
 
 
 if __name__ == "__main__":

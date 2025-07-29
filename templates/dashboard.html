@@ -462,10 +462,10 @@
                 <div class="service-section">
                     <h3>🎧 Spotify</h3>
                     <div class="control-group">
-                        <form method="post" action="http://127.0.0.1:1605/spotify/pull/start/{{ firebase_uid }}" style="display: inline;">
+                        <form method="post" action="http://127.0.0.1:8888/spotify/pull/start/{{ firebase_uid }}" style="display: inline;">
                             <button type="submit" class="btn">Start Pull</button>
                         </form>
-                        <form method="post" action="http://127.0.0.1:1605/spotify/pull/stop/{{ firebase_uid }}" style="display: inline;">
+                        <form method="post" action="http://127.0.0.1:8888/spotify/pull/stop/{{ firebase_uid }}" style="display: inline;">
                             <button type="submit" class="btn danger">Stop Pull</button>
                         </form>
                     </div>
@@ -493,10 +493,10 @@
                 <div class="service-section">
                     <h3>💬 Slack</h3>
                     <div class="control-group">
-                        <form method="post" action="http://127.0.0.1:1605/slack/worker/start/{{ firebase_uid }}" style="display: inline;">
+                        <form method="post" action="http://127.0.0.1:8888/slack/worker/start/{{ firebase_uid }}" style="display: inline;">
                             <button type="submit" class="btn secondary">Start Worker</button>
                         </form>
-                        <form method="post" action="http://127.0.0.1:1605/slack/worker/stop/{{ firebase_uid }}" style="display: inline;">
+                        <form method="post" action="http://127.0.0.1:8888/slack/worker/stop/{{ firebase_uid }}" style="display: inline;">
                             <button type="submit" class="btn danger">Stop Worker</button>
                         </form>
                     </div>
@@ -535,9 +535,9 @@
             <div class="card">
                 <h2><span class="emoji">🔧</span> Debug & Tools</h2>
                 <div class="debug-links">
-                    <a href="http://127.0.0.1:1605/user/tokens/{{ firebase_uid }}">🔑 View Tokens</a>
-                    <a href="http://127.0.0.1:1605/spotify/now/{{ firebase_uid }}">🎵 Now Playing</a>
-                    <a href="http://127.0.0.1:1605/health">🏥 Server Health</a>
+                    <a href="http://127.0.0.1:8888/user/tokens/{{ firebase_uid }}">🔑 View Tokens</a>
+                    <a href="http://127.0.0.1:8888/spotify/now/{{ firebase_uid }}">🎵 Now Playing</a>
+                    <a href="http://127.0.0.1:8888/health">🏥 Server Health</a>
                 </div>
             </div>
 
@@ -560,7 +560,7 @@
             const emoji = document.getElementById('globalStatusEmoji').value;
             const firebaseUid = '{{ firebase_uid }}';
 
-            fetch(`http://127.0.0.1:1605/global/status/${firebaseUid}`, {
+            fetch(`http://127.0.0.1:8888/global/status/${firebaseUid}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -591,7 +591,7 @@
         function updateStatuses() {
             const firebaseUid = '{{ firebase_uid }}';
 
-            fetch(`http://127.0.0.1:1605/spotify/pull/status/${firebaseUid}`)
+            fetch(`http://127.0.0.1:8888/spotify/pull/status/${firebaseUid}`)
                 .then(res => res.json())
                 .then(data => {
                     const element = document.getElementById('spotifyPullStatus');
@@ -602,7 +602,7 @@
                     document.getElementById('spotifyPullStatus').innerText = '❌ Error';
                 });
 
-            fetch(`http://127.0.0.1:1605/slack/worker/status/${firebaseUid}`)
+            fetch(`http://127.0.0.1:8888/slack/worker/status/${firebaseUid}`)
                 .then(res => res.json())
                 .then(data => {
                     const element = document.getElementById('slackWorkerStatus');
