@@ -1,4 +1,4 @@
-from flask import Flask, redirect, request, session, render_template, jsonify
+from flask import Flask, redirect, request, session, render_template, jsonify, render_template_string
 import os
 import requests
 from dotenv import load_dotenv
@@ -43,7 +43,7 @@ FIREBASE_CONFIG = {
     "appId": os.getenv("FIREBASE_APP_ID")
 }
 
-existing_services = ["YOUTUBE", "APPLE_MUSIC", "SPOTIFY"]
+existing_services = ["youtube", "apple_music", "spotify"]
 
 def verify_firebase_token(id_token):
     try:
@@ -654,6 +654,183 @@ def spotify_pull_status_route(firebase_uid):
     active = spotify_pull_status.get(firebase_uid, False)
     return jsonify({'success': True, 'pulling': active})
 
+
+# Extension
+
+@app.route("/extension/login")
+def extension_login():
+    return render_template_string('''
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+        <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+    </head>
+    <body>
+        <div id="status">Initializing login...</div>
+        <script>
+            const firebaseConfig = {{ firebase_config|safe }};
+            firebase.initializeApp(firebaseConfig);
+
+            firebase.auth().onAuthStateChanged(async (user) => {
+                if (user) {
+                    try {
+                        const idToken = await user.getIdToken();
+                        const extensionId = new URLSearchParams(window.location.search).get('extension_id');
+                        const redirectUrl = `https://${extensionId}.chromiumapp.org/#token=${idToken}`;
+                        window.location.href = redirectUrl;
+                    } catch (error) {
+                        document.getElementById('status').textContent = 'Error getting token: ' + error.message;
+                    }
+                } else {
+                    document.getElementById('status').textContent = 'Please sign in';
+                    const provider = new firebase.auth.GoogleAuthProvider();
+                    firebase.auth().signInWithPopup(provider).catch((error) => {
+                        document.getElementById('status').textContent = 'Login failed: ' + error.message;
+                    });
+                }
+            });
+        </script>
+    </body>
+    </html>
+    ''', firebase_config=json.dumps(FIREBASE_CONFIG))
+
+def verify_extension_auth(f):
+    from functools import wraps
+    
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({'error': 'Missing or invalid authorization header'}), 401
+        
+        id_token = auth_header.split('Bearer ')[1]
+        decoded_token = verify_firebase_token(id_token)
+        
+        if not decoded_token:
+            return jsonify({'error': 'Invalid token'}), 401
+        
+        request.firebase_uid = decoded_token['uid']
+        request.user_email = decoded_token.get('email', '')
+        return f(*args, **kwargs)
+    
+    return decorated_function
+
+@app.route("/api/set_client_status/<firebase_uid>", methods=['POST'])
+@verify_extension_auth
+def set_client_status(firebase_uid):
+    if request.firebase_uid != firebase_uid:
+        return jsonify({'error': 'Unauthorized'}), 403
+    
+    try:
+        data = request.get_json()
+        name = data.get('name')
+        artist = data.get('artist')
+        source = data.get('source', '').lower()
+        
+        if not name or not artist:
+            return jsonify({'error': 'Name and artist are required'}), 400
+        
+        if source.lower() not in existing_services:
+            return jsonify({'error': 'Unknown source'}), 400
+        
+        song_data = {
+            'name': name,
+            'artist': artist,
+            'updated': datetime.now().isoformat()
+        }
+        
+        field_name = f"last_{source.lower()}"
+        update_data = {field_name: song_data}
+        
+        if update_user_data(firebase_uid, update_data):
+            return jsonify({
+                'success': True,
+                'message': 'Status updated successfully',
+                'data': song_data
+            })
+        else:
+            return jsonify({'error': 'Failed to update status'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route("/api/set_priority/<firebase_uid>", methods=['POST'])
+@verify_extension_auth
+def set_priority(firebase_uid):
+    if request.firebase_uid != firebase_uid:
+        return jsonify({'error': 'Unauthorized'}), 403
+    
+    try:
+        data = request.get_json()
+        priority_list = data.get('list', [])
+        
+        if not isinstance(priority_list, list):
+            return jsonify({'error': 'List must be an array'}), 400
+        
+        priority_string = ','.join(priority_list)
+        
+        priority_data = {
+            'priority': {
+                'list': priority_string,
+                'updated': datetime.now().isoformat()
+            }
+        }
+        
+        if update_user_data(firebase_uid, priority_data):
+            return jsonify({
+                'success': True,
+                'message': 'Priority updated successfully',
+                'priority': priority_string
+            })
+        else:
+            return jsonify({'error': 'Failed to update priority'}), 500
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+def check_if_source_exists(src):
+    for s in existing_services:
+        if src.lower() == s.lower():
+            return(True)
+    return(False)
+    
+@app.route("/api/user/status/<firebase_uid>", methods=['GET'])
+@verify_extension_auth 
+def get_user_status(firebase_uid):
+    if request.firebase_uid != firebase_uid:
+        return jsonify({'error': 'Unauthorized'}), 403
+    
+    try:
+        data = request.get_json()
+        name = data.get('name')
+        artist = data.get('artist')
+        source = data.get('source')
+
+        if not all([name, artist, source]):
+            return jsonify({"error": "Missing name, artist or source"}), 400
+
+        field_name = f"last_{source.lower()}"
+        update_data = {
+            field_name: {
+                "name": name,
+                "artist": artist,
+                "updated": datetime.now().isoformat()
+            }
+        }
+
+        if check_if_source_exists(source) == False:
+            return jsonify({"error": f"Non existent service ({source.lower()})"}), 400
+
+        success = update_user_data(firebase_uid, update_data)
+        if success:
+            return jsonify({"status": "ok"}), 200
+        else:
+            return jsonify({"error": "Failed to update user data"}), 500
+
+    except Exception as e:
+        print(f"Error in set_client_status: {e}")
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8888, debug=True)

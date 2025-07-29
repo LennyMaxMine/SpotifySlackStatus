@@ -1,17 +1,148 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Now Playing</title>
-  <style>
-    body { font-family: sans-serif; width: 200px; padding: 10px; }
-    #status { margin-top: 10px; }
-  </style>
+    <meta charset="utf-8">
+    <style>
+        body {
+            width: 350px;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+        }
+        
+        .status {
+            margin-bottom: 20px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        
+        .status.logged-out {
+            background-color: #ffebee;
+            color: #c62828;
+        }
+        
+        .status.logged-in {
+            background-color: #e8f5e8;
+            color: #2e7d32;
+        }
+        
+        button {
+            width: 100%;
+            padding: 10px;
+            margin: 5px 0;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .primary-btn {
+            background-color: #1976d2;
+            color: white;
+        }
+        
+        .secondary-btn {
+            background-color: #757575;
+            color: white;
+        }
+        
+        .danger-btn {
+            background-color: #d32f2f;
+            color: white;
+        }
+        
+        .form-group {
+            margin: 10px 0;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            box-sizing: border-box;
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        .current-track {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        
+        .loading {
+            text-align: center;
+            color: #666;
+        }
+    </style>
 </head>
 <body>
-    <button id="loginBtn">Login</button>
+    <div id="loading" class="loading">Loading...</div>
+    
+    <div id="logged-out-view" class="hidden">
+        <div class="status logged-out">
+            Not logged in
+        </div>
+        <button id="login-btn" class="primary-btn">Login with Google</button>
+    </div>
+    
+    <div id="logged-in-view" class="hidden">
+        <div class="status logged-in">
+            Logged in as: <span id="user-email"></span>
+        </div>
+        
+        <div class="current-track">
+            <strong>Current Track:</strong>
+            <div id="current-track-info">No track playing</div>
+        </div>
+        
+        <div class="form-group">
+            <label for="track-name">Track Name:</label>
+            <input type="text" id="track-name" placeholder="Enter track name">
+        </div>
+        
+        <div class="form-group">
+            <label for="artist-name">Artist:</label>
+            <input type="text" id="artist-name" placeholder="Enter artist name">
+        </div>
+        
+        <div class="form-group">
+            <label for="source">Source:</label>
+            <select id="source">
+                <option value="youtube">YouTube</option>
+                <option value="spotify">Spotify</option>
+                <option value="apple_music">Apple Music</option>
+            </select>
+        </div>
+        
+        <button id="update-status-btn" class="primary-btn">Update Status</button>
+        
+        <div class="form-group">
+            <label for="priority-list">Priority Order (comma separated):</label>
+            <input type="text" id="priority-list" placeholder="youtube,spotify,apple_music">
+        </div>
+        
+        <button id="update-priority-btn" class="secondary-btn">Update Priority</button>
+        
+        <hr style="margin: 20px 0;">
+        
+        <button id="start-slack-sync-btn" class="primary-btn">Start Slack Sync</button>
+        <button id="stop-slack-sync-btn" class="secondary-btn">Stop Slack Sync</button>
+        
+        <div id="slack-status" style="margin: 10px 0; font-size: 12px; color: #666;"></div>
+        
+        <button id="logout-btn" class="danger-btn">Logout</button>
+    </div>
 
-  <h3>Now Playing</h3>
-  <div id="status">Loading...</div>
-  <script src="popup.js"></script>
+    <script src="popup.js"></script>
 </body>
 </html>

@@ -401,7 +401,7 @@ def set_client_status(firebase_uid):
         data = request.get_json()
         name = data.get('name')
         artist = data.get('artist')
-        source = data.get('source')
+        source = data.get('source').lower()
 
         if not all([name, artist, source]):
             return jsonify({"error": "Missing name, artist or source"}), 400
