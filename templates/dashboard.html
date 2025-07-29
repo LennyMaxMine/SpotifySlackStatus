@@ -493,10 +493,10 @@
                 <div class="service-section">
                     <h3>💬 Slack</h3>
                     <div class="control-group">
-                        <form method="post" action="http://127.0.0.1:8888/slack/worker/start/{{ firebase_uid }}" style="display: inline;">
+                        <form method="post" action="http://127.0.0.1:8888/sync/slack/start/{{ firebase_uid }}" style="display: inline;">
                             <button type="submit" class="btn secondary">Start Worker</button>
                         </form>
-                        <form method="post" action="http://127.0.0.1:8888/slack/worker/stop/{{ firebase_uid }}" style="display: inline;">
+                        <form method="post" action="http://127.0.0.1:8888/sync/slack/stop/{{ firebase_uid }}" style="display: inline;">
                             <button type="submit" class="btn danger">Stop Worker</button>
                         </form>
                     </div>
@@ -602,7 +602,7 @@
                     document.getElementById('spotifyPullStatus').innerText = '❌ Error';
                 });
 
-            fetch(`http://127.0.0.1:8888/slack/worker/status/${firebaseUid}`)
+            fetch(`http://127.0.0.1:8888/sync/slack/status/${firebaseUid}`)
                 .then(res => res.json())
                 .then(data => {
                     const element = document.getElementById('slackWorkerStatus');

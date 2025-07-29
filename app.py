@@ -178,7 +178,7 @@ def slack_sync_worker(firebase_uid):
             sync_status[firebase_uid]['error_count'] = sync_status[firebase_uid].get('error_count', 0) + 1
             time.sleep(10)
 
-@app.route('/sync/start/<firebase_uid>', methods=['POST'])
+@app.route('/sync/slack/start/<firebase_uid>', methods=['POST'])
 def start_sync(firebase_uid):
     try:
         slack_token, _, _ = get_user_tokens(firebase_uid)
@@ -205,7 +205,7 @@ def start_sync(firebase_uid):
     except Exception as e:
         return jsonify({'error': str(e), 'success': False}), 500
 
-@app.route('/sync/stop/<firebase_uid>', methods=['POST'])
+@app.route('/sync/slack/stop/<firebase_uid>', methods=['POST'])
 def stop_sync(firebase_uid):
     try:
         if firebase_uid in sync_status:
@@ -214,7 +214,7 @@ def stop_sync(firebase_uid):
     except Exception as e:
         return jsonify({'error': str(e), 'success': False}), 500
 
-@app.route('/sync/status/<firebase_uid>', methods=['GET'])
+@app.route('/sync/slack/status/<firebase_uid>', methods=['GET'])
 def get_sync_status(firebase_uid):
     try:
         status = sync_status.get(firebase_uid, {})
@@ -596,6 +596,65 @@ def get_user_tokens():
     })
 
 
+# Spotify Pull
+
+spotify_pull_status = {}
+spotify_threads = {}
+
+def spotify_pull_worker(firebase_uid):
+    spotify_pull_status[firebase_uid] = True
+
+    _, spotify_token, spotify_refresh_token = get_user_tokens(firebase_uid)
+    sp = spotipy.Spotify(auth=spotify_token)
+
+    while spotify_pull_status.get(firebase_uid, False):
+        try:
+            playback = sp.current_playback()
+            if playback and playback.get("is_playing"):
+                track = playback["item"]
+                if track:
+                    song_data = {
+                        "name": track["name"],
+                        "artist": ", ".join(a["name"] for a in track["artists"]),
+                        "updated": datetime.now().isoformat()
+                    }
+                    update_user_data(firebase_uid, {"last_spotify": song_data})
+        except spotipy.exceptions.SpotifyException as e:
+            if e.http_status == 401:
+                new_token = refresh_spotify_token(firebase_uid, spotify_refresh_token)
+                if new_token:
+                    sp = spotipy.Spotify(auth=new_token)
+                else:
+                    print(f"Spotify token refresh failed for {firebase_uid}")
+            else:
+                print(f"Spotify API error for {firebase_uid}: {e}")
+        except Exception as e:
+            print(f"Spotify pull error for {firebase_uid}: {e}")
+
+        time.sleep(30)
+
+    print(f"Spotify pull stopped for {firebase_uid}")
+
+@app.route('/spotify/pull/start/<firebase_uid>', methods=['POST'])
+def start_spotify_pull(firebase_uid):
+    if not spotify_pull_status.get(firebase_uid, False):
+        spotify_pull_status[firebase_uid] = True
+        t = threading.Thread(target=spotify_pull_worker, args=(firebase_uid,), daemon=True)
+        t.start()
+        spotify_threads[firebase_uid] = t
+    return jsonify({'success': True, 'message': 'Spotify pulling started'})
+
+@app.route('/spotify/pull/stop/<firebase_uid>', methods=['POST'])
+def stop_spotify_pull(firebase_uid):
+    spotify_pull_status[firebase_uid] = False
+    return jsonify({'success': True, 'message': 'Spotify pulling stopped'})
+
+@app.route('/spotify/pull/status/<firebase_uid>', methods=['GET'])
+def spotify_pull_status_route(firebase_uid):
+    active = spotify_pull_status.get(firebase_uid, False)
+    return jsonify({'success': True, 'pulling': active})
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8888, debug=True)
+
